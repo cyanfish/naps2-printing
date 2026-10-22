@@ -82,3 +82,7 @@ printer) aren't shown.
 
 `GetPage` is called on background threads (one call at a time), and can be called more than once for the same page.
 Each `PageImage` is disposed once it has been drawn. If `GetPage` throws, `ShowAsync` rethrows the exception.
+
+## License
+
+NAPS2.Windows.Printing is licensed under the [MIT license](LICENSE).
