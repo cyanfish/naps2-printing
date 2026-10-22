@@ -22,6 +22,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     private readonly int _pageCount;
     private readonly Func<int, PageImage> _getPage;
     private readonly int _startPage;
+    private readonly bool _rotatePages;
     private readonly D3D11Device _d3dDevice;
     private readonly D2DDevice _d2dDevice;
     // The print dialog calls from multiple threads, so calls are serialized with this lock
@@ -32,16 +33,19 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     private List<int> _previewPages = [];
     private uint _previewStartPage = 1;
     private uint _shownJobPage;
+    // Whether the page range changed since the preview was paginated, so the preview goes back to the start
+    private bool _pageRangeChanged;
     // A page assumed to be the dialog's "current page" until the dialog reports it
     private int? _currentPageCheck;
     private int _currentPageCheckPageNumber;
     private bool _disposed;
 
-    public PrintDocumentSource(int pageCount, Func<int, PageImage> getPage, int startPage)
+    public PrintDocumentSource(int pageCount, Func<int, PageImage> getPage, PrintDialogOptions options)
     {
         _pageCount = pageCount;
         _getPage = getPage;
-        _startPage = startPage;
+        _startPage = options.StartPage;
+        _rotatePages = options.RotatePages;
         _d3dDevice = D3D11Device.Create();
         _d2dDevice = D2DDevice.Create(_d3dDevice);
     }
@@ -58,7 +62,21 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     {
         if (_previewOptions != null)
         {
-            UpdatePreview(_previewOptions);
+            _pageRangeChanged = true;
+            UpdatePreview(_previewOptions, JOB_PAGE_APPLICATION_DEFINED);
+        }
+    });
+
+    /// <summary>
+    /// Redraws the preview pages after an option that affects how they look changes.
+    /// </summary>
+    public void RedrawPreview() => Run(() =>
+    {
+        if (_previewTarget != null && _shownJobPage > 0)
+        {
+            _previewStartPage = _shownJobPage;
+            _previewTarget.InvalidatePreview();
+            _previewTarget.SetJobPageCount(PageCountType.FinalPageCount, (uint) _previewPages.Count);
         }
     });
 
@@ -96,7 +114,8 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     public void Paginate(uint currentJobPage, nint printTaskOptions) => Run(() =>
     {
         _previewOptions = WinRt.GetObject<IPrintTaskOptionsCore>(printTaskOptions);
-        UpdatePreview(_previewOptions);
+        UpdatePreview(_previewOptions, _pageRangeChanged ? JOB_PAGE_APPLICATION_DEFINED : currentJobPage);
+        _pageRangeChanged = false;
     });
 
     public void MakePage(uint desiredJobPage, float width, float height) => Run(() =>
@@ -121,8 +140,11 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         context.SetDpi(PREVIEW_DPI, PREVIEW_DPI);
         context.BeginDraw();
         context.Clear(1, 1, 1);
-        // The preview size is in DIPs, so the page is scaled to fit it
-        DrawPage(context, pageIndices[(int) desiredJobPage - 1], page, Matrix3x2.CreateScale(width / page.PageWidth));
+        // The preview size is in DIPs, so the page is scaled to fit it. The printer converts the colors when printing,
+        // but the preview needs to show that.
+        var colorMode = ((IPrintTaskOptionsCoreProperties) _previewOptions).get_ColorMode();
+        DrawPage(context, pageIndices[(int) desiredJobPage - 1], page, Matrix3x2.CreateScale(width / page.PageWidth),
+            colorMode is PrintColorMode.Grayscale or PrintColorMode.Monochrome);
         context.EndDraw();
         context.SetTarget(null);
 
@@ -142,7 +164,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
             using var commandList = context.CreateCommandList();
             context.SetTarget(commandList);
             context.BeginDraw();
-            DrawPage(context, pageIndices[i], page, Matrix3x2.Identity);
+            DrawPage(context, pageIndices[i], page, Matrix3x2.Identity, false);
             context.EndDraw();
             context.SetTarget(null);
             commandList.Close();
@@ -170,9 +192,10 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
 
     /// <summary>
     /// Sets the pages in the preview to the pages to print. A single page is shown in place in the whole document
-    /// instead, as the dialog takes the page shown in the preview as its "current page", and would see page 1.
+    /// instead, as the dialog takes the page shown in the preview as its "current page", and would see page 1. If the
+    /// pages are the same as before (e.g. the orientation changed), the preview stays on the current job page.
     /// </summary>
-    private void UpdatePreview(IPrintTaskOptionsCore options)
+    private void UpdatePreview(IPrintTaskOptionsCore options, uint currentJobPage)
     {
         var pageIndices = GetPageIndices(options);
         int startPage;
@@ -185,9 +208,12 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         {
             _currentPageCheck = null;
             // The given start page only applies until the preview has shown a page
-            startPage = _shownJobPage == 0 && pageIndices.Contains(_startPage)
-                ? _startPage
-                : pageIndices.FirstOrDefault();
+            startPage = currentJobPage >= 1 && currentJobPage <= _previewPages.Count &&
+                        pageIndices.SequenceEqual(_previewPages)
+                ? _previewPages[(int) currentJobPage - 1]
+                : _shownJobPage == 0 && pageIndices.Contains(_startPage)
+                    ? _startPage
+                    : pageIndices.FirstOrDefault();
             _previewPages = pageIndices;
         }
         _previewStartPage = (uint) Math.Max(_previewPages.IndexOf(startPage), 0) + 1;
@@ -240,7 +266,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
             _currentPageCheck = null;
             try
             {
-                UpdatePreview(_previewOptions!);
+                UpdatePreview(_previewOptions!, JOB_PAGE_APPLICATION_DEFINED);
             }
             catch (Exception)
             {
@@ -275,13 +301,16 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         return pageIndices;
     }
 
-    private void DrawPage(D2DDeviceContext context, int pageIndex, PrintPageDescription page, Matrix3x2 transform)
+    private void DrawPage(D2DDeviceContext context, int pageIndex, PrintPageDescription page, Matrix3x2 transform,
+        bool grayscale)
     {
         using var image = _getPage(pageIndex);
-        using var bitmap = context.CreateBitmap(image.Width, image.Height, image.Pixels, image.Stride);
+        using var bitmap = grayscale
+            ? CreateGrayscaleBitmap(context, image)
+            : context.CreateBitmap(image.Width, image.Height, image.Pixels, image.Stride);
 
         // Rotate the image if needed to match the page orientation, then scale it to fit in the top left of the page
-        bool rotate = image.Width > image.Height != page.PageWidth > page.PageHeight;
+        bool rotate = _rotatePages && image.Width > image.Height != page.PageWidth > page.PageHeight;
         float rotatedWidth = rotate ? image.Height : image.Width;
         float rotatedHeight = rotate ? image.Width : image.Height;
         float scale = Math.Min(page.PageWidth / rotatedWidth, page.PageHeight / rotatedHeight);
@@ -293,6 +322,28 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         }
         context.SetTransform(imageTransform * transform);
         context.DrawBitmap(bitmap, 0, 0, image.Width, image.Height);
+    }
+
+    private static unsafe NativeComObject CreateGrayscaleBitmap(D2DDeviceContext context, PageImage image)
+    {
+        int stride = image.Width * 4;
+        var pixels = new byte[stride * image.Height];
+        for (int y = 0; y < image.Height; y++)
+        {
+            var source = new ReadOnlySpan<byte>((byte*) image.Pixels + (long) y * image.Stride, stride);
+            var target = pixels.AsSpan(y * stride, stride);
+            for (int x = 0; x < stride; x += 4)
+            {
+                // BGRA, with the luma weights from ITU-R BT.601
+                byte gray = (byte) ((source[x] * 29 + source[x + 1] * 150 + source[x + 2] * 77) >> 8);
+                target[x] = target[x + 1] = target[x + 2] = gray;
+                target[x + 3] = source[x + 3];
+            }
+        }
+        fixed (byte* ptr = pixels)
+        {
+            return context.CreateBitmap(image.Width, image.Height, (nint) ptr, stride);
+        }
     }
 
     public void Dispose()

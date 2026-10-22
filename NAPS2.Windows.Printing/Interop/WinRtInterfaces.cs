@@ -170,6 +170,55 @@ internal struct PrintPageDescription
 }
 
 [GeneratedComInterface]
+[Guid("c1b71832-9e93-4e55-814b-3326a59efce1")]
+internal partial interface IPrintTaskOptionsCoreProperties : IInspectable
+{
+    void put_MediaSize(int value);
+
+    int get_MediaSize();
+
+    void put_MediaType(int value);
+
+    int get_MediaType();
+
+    void put_Orientation(PrintOrientationValue value);
+
+    PrintOrientationValue get_Orientation();
+
+    void put_PrintQuality(int value);
+
+    int get_PrintQuality();
+
+    void put_ColorMode(PrintColorMode value);
+
+    PrintColorMode get_ColorMode();
+}
+
+/// <summary>
+/// Windows.Graphics.Printing.PrintOrientation
+/// </summary>
+internal enum PrintOrientationValue
+{
+    Default = 0,
+    NotAvailable = 1,
+    PrinterCustom = 2,
+    Portrait = 3,
+    PortraitFlipped = 4,
+    Landscape = 5,
+    LandscapeFlipped = 6
+}
+
+internal enum PrintColorMode
+{
+    Default = 0,
+    NotAvailable = 1,
+    PrinterCustom = 2,
+    Color = 3,
+    Grayscale = 4,
+    Monochrome = 5
+}
+
+[GeneratedComInterface]
 [Guid("62e69e23-9a1e-4336-b74f-3cc7f4cff709")]
 internal partial interface IPrintTaskOptionsCoreUIConfiguration : IInspectable
 {

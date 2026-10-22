@@ -14,6 +14,7 @@ public static class WindowsPrintDialog
     private const string OPTION_DETAILS_CLASS = "Windows.Graphics.Printing.OptionDetails.PrintTaskOptionDetails";
     // The value of StandardPrintTaskOptions.CustomPageRanges
     private const string CUSTOM_PAGE_RANGES_OPTION = "com.microsoft.JobCustomPageRange";
+    private const string COLOR_MODE_OPTION = "PageOutputColor";
 
     /// <summary>
     /// Gets whether the print dialog is available (Windows 10 and later).
@@ -66,6 +67,10 @@ public static class WindowsPrintDialog
         {
             throw new ArgumentException("The initial pages are out of range.", nameof(options));
         }
+        if (options.Orientation is { } orientation && !Enum.IsDefined(orientation))
+        {
+            throw new ArgumentException("The orientation isn't valid.", nameof(options));
+        }
         if (options.DisplayedOptions?.Any(option => !Enum.IsDefined(option)) == true)
         {
             throw new ArgumentException("The displayed options aren't valid.", nameof(options));
@@ -75,7 +80,7 @@ public static class WindowsPrintDialog
             throw new PlatformNotSupportedException("The Windows print dialog requires Windows 10 or later.");
         }
 
-        using var documentSource = new PrintDocumentSource(pageCount, getPage, options.StartPage);
+        using var documentSource = new PrintDocumentSource(pageCount, getPage, options);
         var interop = WinRt.GetActivationFactory<IPrintManagerInterop>(PRINT_MANAGER_CLASS);
         var printManager = WinRt.TakeObject<IPrintManager>(
             interop.GetForWindow(ownerWindow, typeof(IPrintManager).GUID));
@@ -154,6 +159,12 @@ public static class WindowsPrintDialog
         var options = printTask.get_Options();
         SetDisplayedOptions(((IPrintTaskOptionsCoreUIConfiguration) options).get_DisplayedOptions(),
             dialogOptions.DisplayedOptions);
+        if (dialogOptions.Orientation is { } orientation)
+        {
+            ((IPrintTaskOptionsCoreProperties) options).put_Orientation(orientation == PrintOrientation.Landscape
+                ? PrintOrientationValue.Landscape
+                : PrintOrientationValue.Portrait);
+        }
         var pageRangeOptions = ((IPrintTaskOptions2) options).get_PageRangeOptions();
         pageRangeOptions.put_AllowAllPages(true);
         pageRangeOptions.put_AllowCurrentPage(dialogOptions.AllowCurrentPage);
@@ -164,16 +175,21 @@ public static class WindowsPrintDialog
             AddPageRanges(((IPrintTaskOptions2) options).get_CustomPageRanges(), dialogOptions.InitialPages);
         }
 
-        // The dialog doesn't update the preview when the page range changes
+        // The dialog doesn't update the preview when the page range or color mode changes
         var optionDetails = WinRt.GetActivationFactory<IPrintTaskOptionDetailsStatic>(OPTION_DETAILS_CLASS)
             .GetFromPrintTaskOptions(options);
         using var optionChangedHandler = WinRt.GetPointer<IPrintTaskOptionChangedHandler>(
             new PrintTaskOptionChangedHandler(changedArgs =>
             {
                 var optionId = WinRt.GetObject<IPrintTaskOptionChangedEventArgs>(changedArgs).get_OptionId();
-                if (WinRt.TakeBoxedString(optionId) == CUSTOM_PAGE_RANGES_OPTION)
+                switch (WinRt.TakeBoxedString(optionId))
                 {
-                    documentSource.RefreshPreview();
+                    case CUSTOM_PAGE_RANGES_OPTION:
+                        documentSource.RefreshPreview();
+                        break;
+                    case COLOR_MODE_OPTION:
+                        documentSource.RedrawPreview();
+                        break;
                 }
             }));
         optionDetails.add_OptionChanged(optionChangedHandler.Value);
@@ -209,7 +225,7 @@ public static class WindowsPrintDialog
     {
         PrintOption.Copies => "JobCopiesAllDocuments",
         PrintOption.Orientation => "PageOrientation",
-        PrintOption.ColorMode => "PageOutputColor",
+        PrintOption.ColorMode => COLOR_MODE_OPTION,
         PrintOption.PageRange => CUSTOM_PAGE_RANGES_OPTION,
         PrintOption.PaperSize => "PageMediaSize",
         PrintOption.PaperType => "PageMediaType",

@@ -24,6 +24,17 @@ public sealed class PrintDialogOptions
     public bool AllowCurrentPage { get; init; } = true;
 
     /// <summary>
+    /// Gets or sets the paper orientation that the dialog starts with, or null for the printer's default.
+    /// </summary>
+    public PrintOrientation? Orientation { get; init; }
+
+    /// <summary>
+    /// Gets or sets whether pages are rotated to match the paper orientation, so that e.g. a landscape image fills
+    /// portrait paper. The default is true.
+    /// </summary>
+    public bool RotatePages { get; init; } = true;
+
+    /// <summary>
     /// Gets or sets the options shown in the main part of the dialog, in order, with the rest shown under "More
     /// settings". The page range is always shown, after the other options unless it's in the list. Options that the
     /// printer doesn't support aren't shown. If null, the dialog shows its default options.

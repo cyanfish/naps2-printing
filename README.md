@@ -10,8 +10,6 @@ way UWP and WinUI apps do, so the preview works. It can be used from WinForms, W
 
 - Each page is an image, rotated (if needed) to match the paper orientation and scaled to fit the paper
 - Supports printing all pages, the current page in the preview or a custom page range
-- The dialog has no "Selection" option, but you can start with the selected pages as the custom range
-- Images are sent to the printer at their full resolution
 - Requires Windows 10 or later and .NET 8 or later
 - No dependencies (it calls the Windows APIs directly)
 
@@ -47,6 +45,10 @@ var options = new PrintDialogOptions
     StartPage = selectedPages.Min(),
     // The pages to print by default, shown as a custom page range (null for all pages)
     InitialPages = selectedPages,
+    // The paper orientation that the dialog starts with (null for the printer's default)
+    Orientation = PrintOrientation.Landscape,
+    // Whether pages are rotated to match the paper orientation (true by default)
+    RotatePages = true,
     // The options shown in the main part of the dialog (null for the defaults)
     DisplayedOptions = [PrintOption.Copies, PrintOption.Orientation, PrintOption.PageRange, PrintOption.PaperSize]
 };
