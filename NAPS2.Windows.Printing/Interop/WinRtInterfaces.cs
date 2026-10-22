@@ -4,8 +4,8 @@ using System.Runtime.InteropServices.Marshalling;
 namespace NAPS2.Windows.Printing.Interop;
 
 // WinRT printing interfaces (Windows.Graphics.Printing), with the layouts and IIDs from the Windows SDK headers
-// (windows.graphics.printing.h, printmanagerinterop.h and asyncinfo.h). Interfaces only declare the methods up to the
-// last one used, as the vtable order is what matters.
+// (windows.graphics.printing.h, windows.graphics.printing.optiondetails.h, printmanagerinterop.h and asyncinfo.h).
+// Interfaces only declare the methods up to the last one used, as the vtable order is what matters.
 
 [GeneratedComInterface]
 [Guid("af86e2e0-b12d-4c6a-9c5a-d7aa65101e90")]
@@ -211,6 +211,90 @@ internal partial interface IPrintPageRange : IInspectable
     int get_LastPageNumber();
 }
 
+[GeneratedComInterface]
+[Guid("408fd45f-e047-5f85-7129-fb085a4fad14")]
+internal partial interface IPrintPageRangeFactory : IInspectable
+{
+    nint Create(int firstPage, int lastPage);
+}
+
+[GeneratedComInterface]
+[Guid("135da193-0961-4b6e-8766-f13b7fbccd58")]
+internal partial interface IPrintTaskOptionDetailsStatic : IInspectable
+{
+    IPrintTaskOptionDetails GetFromPrintTaskOptions(IPrintTaskOptionsCore printTaskOptions);
+}
+
+[GeneratedComInterface]
+[Guid("f5720af1-a89e-42a6-81af-f8e010b38a68")]
+internal partial interface IPrintTaskOptionDetails : IInspectable
+{
+    nint get_Options();
+
+    nint CreateItemListOption(nint optionId, nint displayName);
+
+    nint CreateTextOption(nint optionId, nint displayName);
+
+    long add_OptionChanged(nint eventHandler);
+}
+
+/// <summary>
+/// TypedEventHandler&lt;PrintTaskOptionDetails, PrintTaskOptionChangedEventArgs&gt;
+/// </summary>
+[GeneratedComInterface]
+[Guid("1b1f456b-8821-592e-b4a7-9b4c3712518e")]
+internal partial interface IPrintTaskOptionChangedHandler
+{
+    void Invoke(nint sender, nint args);
+}
+
+[GeneratedComInterface]
+[Guid("65197d05-a5ee-4307-9407-9acad147679c")]
+internal partial interface IPrintTaskOptionChangedEventArgs : IInspectable
+{
+    /// <summary>
+    /// The option ID, as a boxed string.
+    /// </summary>
+    nint get_OptionId();
+}
+
+/// <summary>
+/// Windows.Foundation.IPropertyValue (from windows.foundation.h), which boxes values. Only GetString is used; the other
+/// methods are placeholders for their vtable slots.
+/// </summary>
+[GeneratedComInterface]
+[Guid("4bd682dd-7554-40e9-9a9b-82654ede7e62")]
+internal partial interface IPropertyValue : IInspectable
+{
+    void Unused06();
+
+    void Unused07();
+
+    void Unused08();
+
+    void Unused09();
+
+    void Unused10();
+
+    void Unused11();
+
+    void Unused12();
+
+    void Unused13();
+
+    void Unused14();
+
+    void Unused15();
+
+    void Unused16();
+
+    void Unused17();
+
+    void Unused18();
+
+    nint GetString();
+}
+
 /// <summary>
 /// IVector&lt;HSTRING&gt;
 /// </summary>
@@ -233,6 +317,10 @@ internal partial interface IVectorString : IInspectable
     void RemoveAt(uint index);
 
     void Append(nint item);
+
+    void RemoveAtEnd();
+
+    void Clear();
 }
 
 /// <summary>
@@ -245,6 +333,18 @@ internal partial interface IVectorPrintPageRange : IInspectable
     IPrintPageRange GetAt(uint index);
 
     uint get_Size();
+
+    nint GetView();
+
+    void IndexOf(nint value, out uint index, [MarshalAs(UnmanagedType.U1)] out bool found);
+
+    void SetAt(uint index, nint item);
+
+    void InsertAt(uint index, nint item);
+
+    void RemoveAt(uint index);
+
+    void Append(nint item);
 }
 
 /// <summary>

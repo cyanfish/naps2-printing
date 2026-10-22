@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
 using NAPS2.Windows.Printing.Interop;
 
 namespace NAPS2.Windows.Printing;
@@ -9,6 +10,8 @@ namespace NAPS2.Windows.Printing;
 public static class WindowsPrintDialog
 {
     private const string PRINT_MANAGER_CLASS = "Windows.Graphics.Printing.PrintManager";
+    private const string PAGE_RANGE_CLASS = "Windows.Graphics.Printing.PrintPageRange";
+    private const string OPTION_DETAILS_CLASS = "Windows.Graphics.Printing.OptionDetails.PrintTaskOptionDetails";
     // The value of StandardPrintTaskOptions.CustomPageRanges
     private const string CUSTOM_PAGE_RANGES_OPTION = "com.microsoft.JobCustomPageRange";
 
@@ -32,8 +35,8 @@ public static class WindowsPrintDialog
 
     /// <summary>
     /// Shows the print dialog, and prints the pages if the user chooses to. Each page is an image that's rotated (if
-    /// needed) to match the paper orientation and scaled to fit the paper. The user can choose to print all pages or a
-    /// range of pages.
+    /// needed) to match the paper orientation and scaled to fit the paper. The user can choose to print all pages, the
+    /// current page or a range of pages.
     /// <para/>
     /// This must be called on the owner window's UI thread.
     /// </summary>
@@ -43,33 +46,49 @@ public static class WindowsPrintDialog
     /// <param name="getPage">Gets the image for a page, by its zero-based index. This is called on background threads,
     /// one call at a time, and can be called more than once for the same page. The image is disposed once it has been
     /// drawn. Any exception is rethrown by this method.</param>
+    /// <param name="options">Options for the dialog, or null for the defaults.</param>
     /// <returns>True if the document was sent to the printer, or false if the user cancelled.</returns>
     /// <exception cref="PlatformNotSupportedException">The print dialog isn't available (see
     /// <see cref="IsSupported"/>).</exception>
     /// <exception cref="InvalidOperationException">The print job failed.</exception>
     public static async Task<bool> ShowAsync(nint ownerWindow, string title, int pageCount,
-        Func<int, PageImage> getPage)
+        Func<int, PageImage> getPage, PrintDialogOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(title);
         ArgumentOutOfRangeException.ThrowIfNegative(pageCount);
         ArgumentNullException.ThrowIfNull(getPage);
+        options ??= new PrintDialogOptions();
+        if (options.StartPage < 0 || options.StartPage >= Math.Max(pageCount, 1))
+        {
+            throw new ArgumentException("The start page is out of range.", nameof(options));
+        }
+        if (options.InitialPages?.Any(page => page < 0 || page >= pageCount) == true)
+        {
+            throw new ArgumentException("The initial pages are out of range.", nameof(options));
+        }
+        if (options.DisplayedOptions?.Any(option => !Enum.IsDefined(option)) == true)
+        {
+            throw new ArgumentException("The displayed options aren't valid.", nameof(options));
+        }
         if (!IsSupported)
         {
             throw new PlatformNotSupportedException("The Windows print dialog requires Windows 10 or later.");
         }
 
-        using var documentSource = new PrintDocumentSource(pageCount, getPage);
+        using var documentSource = new PrintDocumentSource(pageCount, getPage, options.StartPage);
         var interop = WinRt.GetActivationFactory<IPrintManagerInterop>(PRINT_MANAGER_CLASS);
         var printManager = WinRt.TakeObject<IPrintManager>(
             interop.GetForWindow(ownerWindow, typeof(IPrintManager).GUID));
         var completion = new TaskCompletionSource<PrintTaskCompletion>(
             TaskCreationOptions.RunContinuationsAsynchronously);
+        // The option details raise the page range events, so a reference is kept while the dialog is open
+        IPrintTaskOptionDetails? optionDetails = null;
 
         using var requestedHandler = WinRt.GetPointer<IPrintTaskRequestedHandler>(new PrintTaskRequestedHandler(args =>
         {
             try
             {
-                CreatePrintTask(args, title, documentSource, completion);
+                optionDetails = CreatePrintTask(args, title, options, documentSource, completion);
             }
             catch (Exception ex)
             {
@@ -103,6 +122,7 @@ public static class WindowsPrintDialog
         finally
         {
             printManager.remove_PrintTaskRequested(token);
+            GC.KeepAlive(optionDetails);
         }
 
         if (documentSource.Error != null)
@@ -118,8 +138,8 @@ public static class WindowsPrintDialog
     }
 
     // Called on a background thread
-    private static void CreatePrintTask(nint argsPtr, string title, PrintDocumentSource documentSource,
-        TaskCompletionSource<PrintTaskCompletion> completion)
+    private static IPrintTaskOptionDetails CreatePrintTask(nint argsPtr, string title, PrintDialogOptions dialogOptions,
+        PrintDocumentSource documentSource, TaskCompletionSource<PrintTaskCompletion> completion)
     {
         var request = WinRt.GetObject<IPrintTaskRequestedEventArgs>(argsPtr).get_Request();
         using var titleString = new HString(title);
@@ -132,15 +152,98 @@ public static class WindowsPrintDialog
         var printTask = request.CreatePrintTask(titleString.Handle, sourceRequestedHandler.Value);
 
         var options = printTask.get_Options();
-        using var pageRangesOption = new HString(CUSTOM_PAGE_RANGES_OPTION);
-        ((IPrintTaskOptionsCoreUIConfiguration) options).get_DisplayedOptions().Append(pageRangesOption.Handle);
+        SetDisplayedOptions(((IPrintTaskOptionsCoreUIConfiguration) options).get_DisplayedOptions(),
+            dialogOptions.DisplayedOptions);
         var pageRangeOptions = ((IPrintTaskOptions2) options).get_PageRangeOptions();
         pageRangeOptions.put_AllowAllPages(true);
+        pageRangeOptions.put_AllowCurrentPage(dialogOptions.AllowCurrentPage);
         pageRangeOptions.put_AllowCustomSetOfPages(true);
+        if (dialogOptions.InitialPages != null)
+        {
+            // The dialog shows these as a custom range
+            AddPageRanges(((IPrintTaskOptions2) options).get_CustomPageRanges(), dialogOptions.InitialPages);
+        }
+
+        // The dialog doesn't update the preview when the page range changes
+        var optionDetails = WinRt.GetActivationFactory<IPrintTaskOptionDetailsStatic>(OPTION_DETAILS_CLASS)
+            .GetFromPrintTaskOptions(options);
+        using var optionChangedHandler = WinRt.GetPointer<IPrintTaskOptionChangedHandler>(
+            new PrintTaskOptionChangedHandler(changedArgs =>
+            {
+                var optionId = WinRt.GetObject<IPrintTaskOptionChangedEventArgs>(changedArgs).get_OptionId();
+                if (WinRt.TakeBoxedString(optionId) == CUSTOM_PAGE_RANGES_OPTION)
+                {
+                    documentSource.RefreshPreview();
+                }
+            }));
+        optionDetails.add_OptionChanged(optionChangedHandler.Value);
 
         using var completedHandler = WinRt.GetPointer<IPrintTaskCompletedHandler>(
             new PrintTaskCompletedHandler(completedArgs => completion.TrySetResult(
                 WinRt.GetObject<IPrintTaskCompletedEventArgs>(completedArgs).get_Completion())));
         printTask.add_Completed(completedHandler.Value);
+        return optionDetails;
+    }
+
+    private static void SetDisplayedOptions(IVectorString displayed, IReadOnlyList<PrintOption>? displayedOptions)
+    {
+        var optionIds = new List<string>();
+        if (displayedOptions != null)
+        {
+            displayed.Clear();
+            optionIds.AddRange(displayedOptions.Distinct().Select(GetOptionId));
+        }
+        if (displayedOptions?.Contains(PrintOption.PageRange) != true)
+        {
+            optionIds.Add(CUSTOM_PAGE_RANGES_OPTION);
+        }
+        foreach (var optionId in optionIds)
+        {
+            using var optionIdString = new HString(optionId);
+            displayed.Append(optionIdString.Handle);
+        }
+    }
+
+    // The values of the StandardPrintTaskOptions properties. The dialog fails to open if it gets an unknown option.
+    private static string GetOptionId(PrintOption option) => option switch
+    {
+        PrintOption.Copies => "JobCopiesAllDocuments",
+        PrintOption.Orientation => "PageOrientation",
+        PrintOption.ColorMode => "PageOutputColor",
+        PrintOption.PageRange => CUSTOM_PAGE_RANGES_OPTION,
+        PrintOption.PaperSize => "PageMediaSize",
+        PrintOption.PaperType => "PageMediaType",
+        PrintOption.Duplex => "DocumentDuplex",
+        PrintOption.Collation => "DocumentCollate",
+        PrintOption.Quality => "PageOutputQuality",
+        PrintOption.Borderless => "PageBorderless",
+        PrintOption.Staple => "DocumentStaple",
+        PrintOption.HolePunch => "DocumentHolePunch",
+        PrintOption.Binding => "DocumentBinding",
+        _ => throw new ArgumentOutOfRangeException(nameof(option))
+    };
+
+    private static void AddPageRanges(IVectorPrintPageRange ranges, IReadOnlyCollection<int> pageIndices)
+    {
+        var factory = WinRt.GetActivationFactory<IPrintPageRangeFactory>(PAGE_RANGE_CLASS);
+        var sorted = pageIndices.Distinct().Order().ToList();
+        for (int i = 0; i < sorted.Count; i++)
+        {
+            int first = sorted[i];
+            while (i + 1 < sorted.Count && sorted[i + 1] == sorted[i] + 1)
+            {
+                i++;
+            }
+            // Page numbers are one-based
+            nint range = factory.Create(first + 1, sorted[i] + 1);
+            try
+            {
+                ranges.Append(range);
+            }
+            finally
+            {
+                Marshal.Release(range);
+            }
+        }
     }
 }

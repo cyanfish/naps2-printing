@@ -56,6 +56,11 @@ internal static class WinRt
         return TakeObject<T>(factory);
     }
 
+    /// <summary>
+    /// Gets the string from a boxed string, releasing the caller's reference.
+    /// </summary>
+    public static string TakeBoxedString(nint ptr) => HString.Take(TakeObject<IPropertyValue>(ptr).GetString());
+
     public static Task<bool> AsTask(IAsyncOperationBoolean operation)
     {
         var result = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -100,11 +105,30 @@ internal readonly struct HString : IDisposable
 
     public void Dispose() => WindowsDeleteString(Handle);
 
+    /// <summary>
+    /// Reads a WinRT string returned by a method, which the caller owns, and deletes it.
+    /// </summary>
+    public static unsafe string Take(nint hstring)
+    {
+        try
+        {
+            char* buffer = WindowsGetStringRawBuffer(hstring, out uint length);
+            return new string(buffer, 0, (int) length);
+        }
+        finally
+        {
+            WindowsDeleteString(hstring);
+        }
+    }
+
     [DllImport("combase.dll", CharSet = CharSet.Unicode)]
     private static extern int WindowsCreateString(string sourceString, uint length, out nint hstring);
 
     [DllImport("combase.dll")]
     private static extern int WindowsDeleteString(nint hstring);
+
+    [DllImport("combase.dll")]
+    private static extern unsafe char* WindowsGetStringRawBuffer(nint hstring, out uint length);
 }
 
 /// <summary>
@@ -197,4 +221,11 @@ internal partial class AsyncOperationCompletedHandler(Action<nint, AsyncStatus> 
     : AgileComObject, IAsyncOperationCompletedHandlerBoolean
 {
     public void Invoke(nint asyncInfo, AsyncStatus status) => invoke(asyncInfo, status);
+}
+
+[GeneratedComClass]
+internal partial class PrintTaskOptionChangedHandler(Action<nint> invoke)
+    : AgileComObject, IPrintTaskOptionChangedHandler
+{
+    public void Invoke(nint sender, nint args) => invoke(args);
 }

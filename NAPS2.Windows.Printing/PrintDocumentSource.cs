@@ -16,21 +16,32 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     private const float PREVIEW_DPI = 96;
     private static readonly Guid PreviewPackageTargetDxgi = new("1a6dd0ad-1e2a-4e99-a5ba-91f17818290e");
     private static readonly Guid IID_IDXGISurface = new("cafcb56c-6ac3-4889-bf47-9e23bbd260ec");
+    // The dialog reports the page range again within a few milliseconds of the preview moving
+    private static readonly TimeSpan CurrentPageCheckTimeout = TimeSpan.FromMilliseconds(300);
 
     private readonly int _pageCount;
     private readonly Func<int, PageImage> _getPage;
+    private readonly int _startPage;
     private readonly D3D11Device _d3dDevice;
     private readonly D2DDevice _d2dDevice;
     // The print dialog calls from multiple threads, so calls are serialized with this lock
     private readonly object _lock = new();
     private IPrintPreviewDxgiPackageTarget? _previewTarget;
     private IPrintTaskOptionsCore? _previewOptions;
+    // The pages in the preview by job page number, the job page it starts on and the job page it shows
+    private List<int> _previewPages = [];
+    private uint _previewStartPage = 1;
+    private uint _shownJobPage;
+    // A page assumed to be the dialog's "current page" until the dialog reports it
+    private int? _currentPageCheck;
+    private int _currentPageCheckPageNumber;
     private bool _disposed;
 
-    public PrintDocumentSource(int pageCount, Func<int, PageImage> getPage)
+    public PrintDocumentSource(int pageCount, Func<int, PageImage> getPage, int startPage)
     {
         _pageCount = pageCount;
         _getPage = getPage;
+        _startPage = startPage;
         _d3dDevice = D3D11Device.Create();
         _d2dDevice = D2DDevice.Create(_d3dDevice);
     }
@@ -39,6 +50,17 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     /// Gets the first error from providing pages, which the print dialog would otherwise only see as an HRESULT.
     /// </summary>
     public Exception? Error { get; private set; }
+
+    /// <summary>
+    /// Updates the preview after the page range changes.
+    /// </summary>
+    public void RefreshPreview() => Run(() =>
+    {
+        if (_previewOptions != null)
+        {
+            UpdatePreview(_previewOptions);
+        }
+    });
 
     public int GetIids(out uint iidCount, out nint iids)
     {
@@ -74,16 +96,16 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     public void Paginate(uint currentJobPage, nint printTaskOptions) => Run(() =>
     {
         _previewOptions = WinRt.GetObject<IPrintTaskOptionsCore>(printTaskOptions);
-        _previewTarget!.InvalidatePreview();
-        _previewTarget.SetJobPageCount(PageCountType.FinalPageCount, (uint) GetPageIndices(_previewOptions).Count);
+        UpdatePreview(_previewOptions);
     });
 
     public void MakePage(uint desiredJobPage, float width, float height) => Run(() =>
     {
-        var pageIndices = GetPageIndices(_previewOptions!);
+        var pageIndices = _previewPages;
         if (desiredJobPage == JOB_PAGE_APPLICATION_DEFINED)
         {
-            desiredJobPage = 1;
+            // The dialog lets the app choose the page, which becomes its "current page"
+            desiredJobPage = _previewStartPage;
         }
         if (desiredJobPage < 1 || desiredJobPage > pageIndices.Count)
         {
@@ -105,6 +127,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         context.SetTarget(null);
 
         _previewTarget!.DrawPage(desiredJobPage, surface.Ptr, PREVIEW_DPI, PREVIEW_DPI);
+        _shownJobPage = desiredJobPage;
     });
 
     public void MakeDocument(nint printTaskOptions, nint docPackageTarget) => Run(() =>
@@ -141,6 +164,87 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
             {
                 Error ??= ex;
                 throw;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the pages in the preview to the pages to print. A single page is shown in place in the whole document
+    /// instead, as the dialog takes the page shown in the preview as its "current page", and would see page 1.
+    /// </summary>
+    private void UpdatePreview(IPrintTaskOptionsCore options)
+    {
+        var pageIndices = GetPageIndices(options);
+        int startPage;
+        if (pageIndices.Count == 1)
+        {
+            startPage = GetSinglePage(pageIndices[0]);
+            _previewPages = Enumerable.Range(0, _pageCount).ToList();
+        }
+        else
+        {
+            _currentPageCheck = null;
+            // The given start page only applies until the preview has shown a page
+            startPage = _shownJobPage == 0 && pageIndices.Contains(_startPage)
+                ? _startPage
+                : pageIndices.FirstOrDefault();
+            _previewPages = pageIndices;
+        }
+        _previewStartPage = (uint) Math.Max(_previewPages.IndexOf(startPage), 0) + 1;
+        _previewTarget!.InvalidatePreview();
+        _previewTarget.SetJobPageCount(PageCountType.FinalPageCount, (uint) _previewPages.Count);
+    }
+
+    /// <summary>
+    /// Gets the page to show for a page range of one page. When the user chooses "Current page" while the preview only
+    /// has some pages, the dialog gives the job page number in the preview, not the page number in the document. That
+    /// looks the same as typing the number, so this shows the page that was in the preview, and if the dialog doesn't
+    /// then report that page as the current page, goes back to the page with that number.
+    /// </summary>
+    private int GetSinglePage(int pageIndex)
+    {
+        int pageNumber = pageIndex + 1;
+        if (_currentPageCheck is { } checkedPage)
+        {
+            if (pageIndex == checkedPage)
+            {
+                _currentPageCheck = null;
+                return pageIndex;
+            }
+            if (pageNumber == _currentPageCheckPageNumber)
+            {
+                return checkedPage;
+            }
+            _currentPageCheck = null;
+        }
+        if (_previewPages.Count < _pageCount && pageNumber == _shownJobPage && pageNumber <= _previewPages.Count &&
+            _previewPages[pageNumber - 1] != pageIndex)
+        {
+            int previewedPage = _previewPages[pageNumber - 1];
+            _currentPageCheck = previewedPage;
+            _currentPageCheckPageNumber = pageNumber;
+            Task.Delay(CurrentPageCheckTimeout).ContinueWith(_ => EndCurrentPageCheck(previewedPage));
+            return previewedPage;
+        }
+        return pageIndex;
+    }
+
+    private void EndCurrentPageCheck(int previewedPage)
+    {
+        lock (_lock)
+        {
+            if (_disposed || _currentPageCheck != previewedPage)
+            {
+                return;
+            }
+            _currentPageCheck = null;
+            try
+            {
+                UpdatePreview(_previewOptions!);
+            }
+            catch (Exception)
+            {
+                // The dialog may have closed
             }
         }
     }

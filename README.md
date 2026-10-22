@@ -9,7 +9,8 @@ dialog, but it shows "This app doesn't support print preview". This package prov
 way UWP and WinUI apps do, so the preview works. It can be used from WinForms, WPF or any other .NET app with a window.
 
 - Each page is an image, rotated (if needed) to match the paper orientation and scaled to fit the paper
-- Supports printing all pages or a custom page range (the dialog has no "Selection" option)
+- Supports printing all pages, the current page in the preview or a custom page range
+- The dialog has no "Selection" option, but you can start with the selected pages as the custom range
 - Images are sent to the printer at their full resolution
 - Requires Windows 10 or later and .NET 8 or later
 - No dependencies (it calls the Windows APIs directly)
@@ -36,6 +37,26 @@ if (WindowsPrintDialog.IsSupported)
 
 `ShowAsync` must be called on the window's UI thread. It returns true if the document was sent to the printer, or
 false if the user cancelled.
+
+## Options
+
+```c#
+var options = new PrintDialogOptions
+{
+    // The page the preview starts on, which is the page printed if the user chooses "Current page"
+    StartPage = selectedPages.Min(),
+    // The pages to print by default, shown as a custom page range (null for all pages)
+    InitialPages = selectedPages,
+    // The options shown in the main part of the dialog (null for the defaults)
+    DisplayedOptions = [PrintOption.Copies, PrintOption.Orientation, PrintOption.PageRange, PrintOption.PaperSize]
+};
+bool printed = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage, options);
+```
+
+The page range is always shown. Options that the printer doesn't support (e.g. color mode for a black and white
+printer) aren't shown.
+
+## Notes
 
 `GetPage` is called on background threads (one call at a time), and can be called more than once for the same page.
 Each `PageImage` is disposed once it has been drawn. If `GetPage` throws, `ShowAsync` rethrows the exception.
