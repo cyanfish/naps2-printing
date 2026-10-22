@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0-windows</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>true</ImplicitUsings>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+        <GenerateDocumentationFile>true</GenerateDocumentationFile>
+        <IsAotCompatible>true</IsAotCompatible>
+        <RootNamespace>NAPS2.Windows.Printing</RootNamespace>
+        <Title>NAPS2.Windows.Printing</Title>
+        <Product>NAPS2.Windows.Printing</Product>
+
+        <Version>0.9.0</Version>
+        <PackageVersion>0.9.0</PackageVersion>
+        <AssemblyVersion>0.9.0.0</AssemblyVersion>
+
+        <Copyright>Copyright 2026 Ben Olden-Cooligan</Copyright>
+        <Authors>Ben Olden-Cooligan</Authors>
+        <Description>Print images with the Windows print dialog, including its print preview. Works with WinForms, WPF and other .NET apps on Windows.</Description>
+        <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
+        <RepositoryUrl>https://github.com/cyanfish/naps2-printing</RepositoryUrl>
+        <PackageProjectUrl>https://github.com/cyanfish/naps2-printing</PackageProjectUrl>
+        <RepositoryType>git</RepositoryType>
+        <PackageLicenseExpression>MIT</PackageLicenseExpression>
+        <PackageReadmeFile>README.md</PackageReadmeFile>
+        <PackageTags>naps2 print printing preview printdialog windows winforms wpf</PackageTags>
+        <SignAssembly>true</SignAssembly>
+        <AssemblyOriginatorKeyFile>public_signing_key.snk</AssemblyOriginatorKeyFile>
+    </PropertyGroup>
+
+    <!-- For local development, also put the package in a sibling "localnuget" folder (if it exists) so other repos can
+         reference it before it's published -->
+    <PropertyGroup Condition="Exists('$(MSBuildThisFileDirectory)..\..\localnuget')">
+        <PackageOutputPath>$(MSBuildThisFileDirectory)..\..\localnuget</PackageOutputPath>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Using Remove="System.Net.Http" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="..\LICENSE" Pack="true" PackagePath="\" />
+        <None Include="..\README.md" Pack="true" PackagePath="\" />
+    </ItemGroup>
+
+</Project>

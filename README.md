@@ -1,0 +1,41 @@
+# NAPS2.Windows.Printing
+
+[![NuGet](https://img.shields.io/nuget/v/NAPS2.Windows.Printing)](https://www.nuget.org/packages/NAPS2.Windows.Printing/)
+
+NAPS2.Windows.Printing prints images with the Windows print dialog, including its print preview.
+
+Desktop apps that use the classic print APIs (e.g. the WinForms or WPF `PrintDialog`) get the new Windows 11 print
+dialog, but it shows "This app doesn't support print preview". This package provides the pages to the dialog the same
+way UWP and WinUI apps do, so the preview works. It can be used from WinForms, WPF or any other .NET app with a window.
+
+- Each page is an image, rotated (if needed) to match the paper orientation and scaled to fit the paper
+- Supports printing all pages or a custom page range (the dialog has no "Selection" option)
+- Images are sent to the printer at their full resolution
+- Requires Windows 10 or later and .NET 8 or later
+- No dependencies (it calls the Windows APIs directly)
+
+## Example
+
+```c#
+// Pages are provided as 32-bit BGRA pixel data
+PageImage GetPage(int index)
+{
+    var bitmap = images[index];
+    var data = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height), ImageLockMode.ReadOnly,
+        PixelFormat.Format32bppArgb);
+    return new PageImage(data.Width, data.Height, data.Stride, data.Scan0, () => bitmap.UnlockBits(data));
+}
+
+if (WindowsPrintDialog.IsSupported)
+{
+    // WinForms: form.Handle
+    // WPF: new WindowInteropHelper(window).Handle
+    bool printed = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage);
+}
+```
+
+`ShowAsync` must be called on the window's UI thread. It returns true if the document was sent to the printer, or
+false if the user cancelled.
+
+`GetPage` is called on background threads (one call at a time), and can be called more than once for the same page.
+Each `PageImage` is disposed once it has been drawn. If `GetPage` throws, `ShowAsync` rethrows the exception.

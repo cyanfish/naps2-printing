@@ -1,0 +1,8 @@
+bin/
+obj/
+packages/
+*.user
+*.suo
+.vs/
+.idea/
+Desktop.ini
