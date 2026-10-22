@@ -224,6 +224,32 @@ internal partial class AsyncOperationCompletedHandler(Action<nint, AsyncStatus> 
 }
 
 [GeneratedComClass]
+internal partial class PackageStatusHandler(Action<PrintDocumentPackageStatus> invoke)
+    : AgileComObject, IPrintDocumentPackageStatusEvent
+{
+    private const int E_NOTIMPL = unchecked((int) 0x80004001);
+
+    public int GetTypeInfoCount(out uint count)
+    {
+        count = 0;
+        return 0;
+    }
+
+    public int GetTypeInfo(uint index, uint localeId, out nint typeInfo)
+    {
+        typeInfo = 0;
+        return E_NOTIMPL;
+    }
+
+    public int GetIDsOfNames(in Guid iid, nint names, uint nameCount, uint localeId, nint dispIds) => E_NOTIMPL;
+
+    public int Invoke(int dispId, in Guid iid, uint localeId, ushort flags, nint parameters, nint result,
+        nint exceptionInfo, nint argumentError) => E_NOTIMPL;
+
+    public void PackageStatusUpdated(in PrintDocumentPackageStatus packageStatus) => invoke(packageStatus);
+}
+
+[GeneratedComClass]
 internal partial class PrintTaskOptionChangedHandler(Action<nint> invoke)
     : AgileComObject, IPrintTaskOptionChangedHandler
 {

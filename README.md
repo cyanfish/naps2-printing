@@ -27,7 +27,7 @@ PageImage GetPage(int index)
 
 if (WindowsPrintDialog.IsSupported)
 {
-    bool printed = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage);
+    var result = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage);
 }
 ```
 
@@ -49,12 +49,19 @@ PageImage GetPage(int index)
 if (WindowsPrintDialog.IsSupported)
 {
     var handle = new WindowInteropHelper(window).Handle;
-    bool printed = await WindowsPrintDialog.ShowAsync(handle, "My Document", images.Count, GetPage);
+    var result = await WindowsPrintDialog.ShowAsync(handle, "My Document", images.Count, GetPage);
 }
 ```
 
-`ShowAsync` must be called on the window's UI thread. It returns true if the document was sent to the printer, or
-false if the user cancelled.
+`ShowAsync` must be called on the window's UI thread. It returns a `PrintResult`:
+
+```c#
+if (result.Printed)
+{
+    // The number of pages sent to the printer (not counting copies), and the printer name (if it could be found)
+    Console.WriteLine($"Printed {result.PageCount} pages to {result.PrinterName}");
+}
+```
 
 ## Options
 
@@ -69,10 +76,12 @@ var options = new PrintDialogOptions
     Orientation = PrintOrientation.Landscape,
     // Whether pages are rotated to match the paper orientation (true by default)
     RotatePages = true,
+    // Whether pages fit inside the printer's margins instead of the whole paper (false by default)
+    FitToPrintableArea = false,
     // The options shown in the main part of the dialog (null for the defaults)
     DisplayedOptions = [PrintOption.Copies, PrintOption.Orientation, PrintOption.PageRange, PrintOption.PaperSize]
 };
-bool printed = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage, options);
+var result = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage, options);
 ```
 
 The page range is always shown. Options that the printer doesn't support (e.g. color mode for a black and white

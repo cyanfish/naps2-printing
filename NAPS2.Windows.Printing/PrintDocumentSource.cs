@@ -23,6 +23,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     private readonly Func<int, PageImage> _getPage;
     private readonly int _startPage;
     private readonly bool _rotatePages;
+    private readonly bool _fitToPrintableArea;
     private readonly D3D11Device _d3dDevice;
     private readonly D2DDevice _d2dDevice;
     // The print dialog calls from multiple threads, so calls are serialized with this lock
@@ -46,6 +47,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         _getPage = getPage;
         _startPage = options.StartPage;
         _rotatePages = options.RotatePages;
+        _fitToPrintableArea = options.FitToPrintableArea;
         _d3dDevice = D3D11Device.Create();
         _d2dDevice = D2DDevice.Create(_d3dDevice);
     }
@@ -54,6 +56,16 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     /// Gets the first error from providing pages, which the print dialog would otherwise only see as an HRESULT.
     /// </summary>
     public Exception? Error { get; private set; }
+
+    /// <summary>
+    /// Gets the number of pages in the printed document, or 0 if it hasn't been printed.
+    /// </summary>
+    public int PrintedPageCount { get; private set; }
+
+    /// <summary>
+    /// Gets the name of the printer that the document was printed to, if it was found.
+    /// </summary>
+    public string? PrinterName { get; private set; }
 
     /// <summary>
     /// Updates the preview after the page range changes.
@@ -156,6 +168,7 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
     {
         var options = WinRt.GetObject<IPrintTaskOptionsCore>(printTaskOptions);
         var pageIndices = GetPageIndices(options);
+        using var jobIdListener = new JobIdListener(docPackageTarget);
         using var printControl = _d2dDevice.CreatePrintControl(docPackageTarget);
         using var context = _d2dDevice.CreateDeviceContext();
         for (int i = 0; i < pageIndices.Count; i++)
@@ -170,7 +183,10 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
             commandList.Close();
             printControl.AddPage(commandList, page.PageWidth, page.PageHeight);
         }
+        // The job is only in the spooler until the document is closed
+        PrinterName = jobIdListener.JobId is { } jobId ? Spooler.FindPrinterForJob(jobId) : null;
         printControl.Close();
+        PrintedPageCount = pageIndices.Count;
     });
 
     private void Run(Action action)
@@ -309,17 +325,24 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
             ? CreateGrayscaleBitmap(context, image)
             : context.CreateBitmap(image.Width, image.Height, image.Pixels, image.Stride);
 
-        // Rotate the image if needed to match the page orientation, then scale it to fit in the top left of the page
-        bool rotate = _rotatePages && image.Width > image.Height != page.PageWidth > page.PageHeight;
+        bool useImageableArea = _fitToPrintableArea && page.ImageableWidth > 0 && page.ImageableHeight > 0;
+        float areaX = useImageableArea ? page.ImageableX : 0;
+        float areaY = useImageableArea ? page.ImageableY : 0;
+        float areaWidth = useImageableArea ? page.ImageableWidth : page.PageWidth;
+        float areaHeight = useImageableArea ? page.ImageableHeight : page.PageHeight;
+
+        // Rotate the image if needed to match the page orientation, then scale it to fit in the top left of the area
+        bool rotate = _rotatePages && image.Width > image.Height != areaWidth > areaHeight;
         float rotatedWidth = rotate ? image.Height : image.Width;
         float rotatedHeight = rotate ? image.Width : image.Height;
-        float scale = Math.Min(page.PageWidth / rotatedWidth, page.PageHeight / rotatedHeight);
+        float scale = Math.Min(areaWidth / rotatedWidth, areaHeight / rotatedHeight);
         var imageTransform = Matrix3x2.CreateScale(scale);
         if (rotate)
         {
             imageTransform *= Matrix3x2.CreateRotation(MathF.PI / 2) *
                               Matrix3x2.CreateTranslation(rotatedWidth * scale, 0);
         }
+        imageTransform *= Matrix3x2.CreateTranslation(areaX, areaY);
         context.SetTransform(imageTransform * transform);
         context.DrawBitmap(bitmap, 0, 0, image.Width, image.Height);
     }
@@ -343,6 +366,52 @@ internal partial class PrintDocumentSource : AgileComObject, IPrintDocumentSourc
         fixed (byte* ptr = pixels)
         {
             return context.CreateBitmap(image.Width, image.Height, (nint) ptr, stride);
+        }
+    }
+
+    /// <summary>
+    /// Gets the ID of the print job from the document target's status events.
+    /// </summary>
+    private sealed class JobIdListener : IDisposable
+    {
+        private readonly IConnectionPoint? _connectionPoint;
+        private readonly uint _cookie;
+
+        public JobIdListener(nint docPackageTarget)
+        {
+            try
+            {
+                var container = WinRt.GetObject<IConnectionPointContainer>(docPackageTarget);
+                _connectionPoint = container.FindConnectionPoint(typeof(IPrintDocumentPackageStatusEvent).GUID);
+                using var handler = WinRt.GetPointer<IPrintDocumentPackageStatusEvent>(new PackageStatusHandler(
+                    status =>
+                    {
+                        if (status.JobId != 0)
+                        {
+                            JobId = status.JobId;
+                        }
+                    }));
+                _cookie = _connectionPoint.Advise(handler.Value);
+            }
+            catch (Exception)
+            {
+                // The printer name is optional, so failing to get the job ID doesn't stop printing
+                _connectionPoint = null;
+            }
+        }
+
+        public uint? JobId { get; private set; }
+
+        public void Dispose()
+        {
+            try
+            {
+                _connectionPoint?.Unadvise(_cookie);
+            }
+            catch (Exception)
+            {
+                // The print job may have ended
+            }
         }
     }
 

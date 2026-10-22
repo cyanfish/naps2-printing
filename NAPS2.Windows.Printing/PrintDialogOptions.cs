@@ -35,6 +35,13 @@ public sealed class PrintDialogOptions
     public bool RotatePages { get; init; } = true;
 
     /// <summary>
+    /// Gets or sets whether pages are scaled to fit the printable area of the paper, inside the printer's margins,
+    /// instead of the whole paper. If false, the edges of an image that fills the paper may not be printed. The
+    /// default is false.
+    /// </summary>
+    public bool FitToPrintableArea { get; init; }
+
+    /// <summary>
     /// Gets or sets the options shown in the main part of the dialog, in order, with the rest shown under "More
     /// settings". The page range is always shown, after the other options unless it's in the list. Options that the
     /// printer doesn't support aren't shown. If null, the dialog shows its default options.

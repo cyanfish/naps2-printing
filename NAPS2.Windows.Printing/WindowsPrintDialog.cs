@@ -48,11 +48,12 @@ public static class WindowsPrintDialog
     /// one call at a time, and can be called more than once for the same page. The image is disposed once it has been
     /// drawn. Any exception is rethrown by this method.</param>
     /// <param name="options">Options for the dialog, or null for the defaults.</param>
-    /// <returns>True if the document was sent to the printer, or false if the user cancelled.</returns>
+    /// <returns>Whether the document was sent to the printer (false if the user cancelled), and what was printed.
+    /// </returns>
     /// <exception cref="PlatformNotSupportedException">The print dialog isn't available (see
     /// <see cref="IsSupported"/>).</exception>
     /// <exception cref="InvalidOperationException">The print job failed.</exception>
-    public static async Task<bool> ShowAsync(nint ownerWindow, string title, int pageCount,
+    public static async Task<PrintResult> ShowAsync(nint ownerWindow, string title, int pageCount,
         Func<int, PageImage> getPage, PrintDialogOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(title);
@@ -120,7 +121,7 @@ public static class WindowsPrintDialog
             }
             if (!shown)
             {
-                return false;
+                return new PrintResult();
             }
             result = await completion.Task;
         }
@@ -136,9 +137,14 @@ public static class WindowsPrintDialog
         }
         return result switch
         {
-            PrintTaskCompletion.Submitted => true,
+            PrintTaskCompletion.Submitted => new PrintResult
+            {
+                Printed = true,
+                PageCount = documentSource.PrintedPageCount,
+                PrinterName = documentSource.PrinterName
+            },
             PrintTaskCompletion.Failed => throw new InvalidOperationException("The print job failed."),
-            _ => false
+            _ => new PrintResult()
         };
     }
 
