@@ -13,7 +13,7 @@ way UWP and WinUI apps do, so the preview works. It can be used from WinForms, W
 - Requires Windows 10 or later and .NET 8 or later
 - No dependencies (it calls the Windows APIs directly)
 
-## Example
+## WinForms example
 
 ```c#
 // Pages are provided as 32-bit BGRA pixel data
@@ -27,9 +27,29 @@ PageImage GetPage(int index)
 
 if (WindowsPrintDialog.IsSupported)
 {
-    // WinForms: form.Handle
-    // WPF: new WindowInteropHelper(window).Handle
     bool printed = await WindowsPrintDialog.ShowAsync(form.Handle, "My Document", images.Count, GetPage);
+}
+```
+
+## WPF example
+
+```c#
+// Pages are provided as 32-bit BGRA pixel data. The images need to be frozen, as GetPage is called on background
+// threads.
+PageImage GetPage(int index)
+{
+    var bitmap = new FormatConvertedBitmap(images[index], PixelFormats.Bgra32, null, 0);
+    int stride = bitmap.PixelWidth * 4;
+    int size = stride * bitmap.PixelHeight;
+    nint pixels = Marshal.AllocHGlobal(size);
+    bitmap.CopyPixels(Int32Rect.Empty, pixels, size, stride);
+    return new PageImage(bitmap.PixelWidth, bitmap.PixelHeight, stride, pixels, () => Marshal.FreeHGlobal(pixels));
+}
+
+if (WindowsPrintDialog.IsSupported)
+{
+    var handle = new WindowInteropHelper(window).Handle;
+    bool printed = await WindowsPrintDialog.ShowAsync(handle, "My Document", images.Count, GetPage);
 }
 ```
 
